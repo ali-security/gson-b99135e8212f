@@ -16,8 +16,10 @@
 package com.google.gson.internal.bind;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import java.io.IOException;
 import junit.framework.TestCase;
@@ -46,5 +48,60 @@ public class JsonTreeReaderTest extends TestCase {
     JsonTreeReader in = new JsonTreeReader(jsonObject);
     in.skipValue();
     assertEquals(JsonToken.END_DOCUMENT, in.peek());
+  }
+
+  /**
+   * {@link JsonTreeReader} ignores nesting limit because:
+   *
+   * <ul>
+   *   <li>It is an internal class and often created implicitly without the user having access to it
+   *       (as {@link JsonReader}), so they cannot easily adjust the limit
+   *   <li>{@link JsonTreeReader} may be created based on an existing {@link JsonReader}; in that
+   *       case it would be necessary to propagate settings to account for a custom nesting limit,
+   *       see also related https://github.com/google/gson/pull/2151
+   *   <li>Nesting limit as protection against {@link StackOverflowError} is not that relevant for
+   *       {@link JsonTreeReader} because a deeply nested {@link JsonElement} tree would first have
+   *       to be constructed; and if it is constructed from a regular {@link JsonReader}, then its
+   *       nesting limit would already apply
+   * </ul>
+   */
+  public void testNestingLimitIgnored() throws IOException {
+    int limit = 10;
+    JsonArray json = new JsonArray();
+    JsonArray current = json;
+    // This adds additional `limit` nested arrays, so in total there are `limit + 1` arrays
+    for (int i = 0; i < limit; i++) {
+      JsonArray nested = new JsonArray();
+      current.add(nested);
+      current = nested;
+    }
+
+    JsonTreeReader reader = new JsonTreeReader(json);
+    reader.setNestingLimit(limit);
+    assertEquals(limit, reader.getNestingLimit());
+
+    for (int i = 0; i < limit; i++) {
+      reader.beginArray();
+    }
+    // Does not throw exception; limit is ignored
+    reader.beginArray();
+
+    reader.endArray();
+    for (int i = 0; i < limit; i++) {
+      reader.endArray();
+    }
+    assertEquals(JsonToken.END_DOCUMENT, reader.peek());
+    reader.close();
+  }
+
+  /**
+   * The nesting limit accessors are final methods of {@link JsonReader}; {@link JsonTreeReader}
+   * inherits them unchanged instead of overriding them.
+   */
+  public void testNestingLimitMethodsInherited() throws NoSuchMethodException {
+    assertEquals(JsonReader.class,
+        JsonTreeReader.class.getMethod("setNestingLimit", int.class).getDeclaringClass());
+    assertEquals(JsonReader.class,
+        JsonTreeReader.class.getMethod("getNestingLimit").getDeclaringClass());
   }
 }

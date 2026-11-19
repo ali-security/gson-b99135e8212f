@@ -18,6 +18,7 @@ package com.google.gson;
 
 import java.io.CharArrayReader;
 import java.io.CharArrayWriter;
+import java.io.IOException;
 import java.io.StringReader;
 
 import junit.framework.TestCase;
@@ -25,6 +26,7 @@ import junit.framework.TestCase;
 import com.google.gson.common.TestTypes.BagOfPrimitives;
 import com.google.gson.internal.Streams;
 import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.MalformedJsonException;
 
 /**
  * Unit test for {@link JsonParser}
@@ -115,5 +117,88 @@ public class JsonParserTest extends TestCase {
     assertEquals("one", actualOne.stringValue);
     BagOfPrimitives actualTwo = gson.fromJson(element2, BagOfPrimitives.class);
     assertEquals("two", actualTwo.stringValue);
+  }
+
+  private static String repeat(String s, int times) {
+    StringBuilder stringBuilder = new StringBuilder(s.length() * times);
+    for (int i = 0; i < times; i++) {
+      stringBuilder.append(s);
+    }
+    return stringBuilder.toString();
+  }
+
+  /** Deeply nested JSON arrays should not cause {@link StackOverflowError} */
+  public void testParseDeeplyNestedArrays() throws IOException {
+    // Moderate depth: the JsonElement adapter of this version reads nested values recursively
+    int times = 1000;
+    // [[[ ... ]]]
+    String json = repeat("[", times) + repeat("]", times);
+    JsonReader jsonReader = new JsonReader(new StringReader(json));
+    jsonReader.setNestingLimit(Integer.MAX_VALUE);
+
+    int actualTimes = 0;
+    JsonArray current = JsonParser.parseReader(jsonReader).getAsJsonArray();
+    while (true) {
+      actualTimes++;
+      if (current.isEmpty()) {
+        break;
+      }
+      current = current.get(0).getAsJsonArray();
+    }
+    assertEquals(times, actualTimes);
+  }
+
+  /** Deeply nested JSON objects should not cause {@link StackOverflowError} */
+  public void testParseDeeplyNestedObjects() throws IOException {
+    // Moderate depth: the JsonElement adapter of this version reads nested values recursively
+    int times = 1000;
+    // {"a":{"a": ... {"a":null} ... }}
+    String json = repeat("{\"a\":", times) + "null" + repeat("}", times);
+    JsonReader jsonReader = new JsonReader(new StringReader(json));
+    jsonReader.setNestingLimit(Integer.MAX_VALUE);
+
+    int actualTimes = 0;
+    JsonObject current = JsonParser.parseReader(jsonReader).getAsJsonObject();
+    while (true) {
+      assertEquals(1, current.size());
+      actualTimes++;
+      if (current.get("a").isJsonNull()) {
+        break;
+      }
+      current = current.get("a").getAsJsonObject();
+    }
+    assertEquals(times, actualTimes);
+  }
+
+  /**
+   * Deeply nested JSON arrays exceeding the default nesting limit must be rejected with a syntax
+   * error instead of recursing until {@link StackOverflowError}.
+   */
+  public void testParseDeeplyNestedArraysDefaultNestingLimit() {
+    int times = 100000;
+    String json = repeat("[", times) + repeat("]", times);
+    try {
+      JsonParser.parseString(json);
+      fail("Expected JsonSyntaxException");
+    } catch (JsonSyntaxException e) {
+      assertTrue(e.getCause() instanceof MalformedJsonException);
+      assertTrue(e.getCause().getMessage().startsWith("Nesting limit 255 reached"));
+    }
+  }
+
+  /**
+   * Deeply nested JSON objects exceeding the default nesting limit must be rejected with a syntax
+   * error instead of recursing until {@link StackOverflowError}.
+   */
+  public void testParseDeeplyNestedObjectsDefaultNestingLimit() {
+    int times = 100000;
+    String json = repeat("{\"a\":", times) + "null" + repeat("}", times);
+    try {
+      JsonParser.parseReader(new StringReader(json));
+      fail("Expected JsonSyntaxException");
+    } catch (JsonSyntaxException e) {
+      assertTrue(e.getCause() instanceof MalformedJsonException);
+      assertTrue(e.getCause().getMessage().startsWith("Nesting limit 255 reached"));
+    }
   }
 }
